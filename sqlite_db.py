@@ -50,7 +50,6 @@ def upload_screenshot():
     conn.close()
 
     return jsonify({"message": "Screenshot data saved successfully"}), 201
-
 @app.route('/data', methods=['GET'])
 def get_data():
     ids = request.args.getlist('id')
@@ -65,13 +64,15 @@ def get_data():
     c = conn.cursor()
     c.execute(query, ids)
     data = c.fetchall()
-    conn.close()
-    
+
     # Convert the fetched data into a list of dictionaries for better JSON serialization
     column_names = [column[0] for column in c.description]
-    result = [dict(zip(column_names, row)) for row in data]
+    result = [
+        {column: (value.decode() if isinstance(value, bytes) else value) for column, value in zip(column_names, row)}
+        for row in data
+    ]
 
+    conn.close()
     return jsonify({"data": result})
-
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5001, debug=True)
