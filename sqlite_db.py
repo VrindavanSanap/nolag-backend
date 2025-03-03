@@ -68,7 +68,7 @@ def get_data():
     # Convert the fetched data into a list of dictionaries for better JSON serialization
     column_names = [column[0] for column in c.description]
     result = [
-        {column: (value.decode() if isinstance(value, bytes) else value) for column, value in zip(column_names, row)}
+        {column: (value.decode('utf-8', 'replace') if isinstance(value, bytes) else value) for column, value in zip(column_names, row)}
         for row in data
     ]
 
