@@ -56,7 +56,7 @@ def get_data():
     if not ids:
         return jsonify({"error": "No IDs provided"}), 400
 
-    # Use parameterized query to prevent SQL injection and improve readability
+    # Use parameterized query to prevent SQL injection
     placeholders = ','.join('?' for _ in ids)
     query = f"SELECT * FROM screenshots WHERE id IN ({placeholders})"
 
@@ -65,10 +65,13 @@ def get_data():
     c.execute(query, ids)
     data = c.fetchall()
 
-    # Convert the fetched data into a list of dictionaries for better JSON serialization
+    # Convert the fetched data into a list of dictionaries for JSON serialization
     column_names = [column[0] for column in c.description]
     result = [
-        {column: (value.decode('utf-8', 'replace') if isinstance(value, bytes) else value) for column, value in zip(column_names, row)}
+        {
+            column: (base64.b64encode(value).decode() if isinstance(value, bytes) else value)
+            for column, value in zip(column_names, row)
+        }
         for row in data
     ]
 
