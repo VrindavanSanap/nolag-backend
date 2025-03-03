@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 import sqlite3
+import base64  # Needed to encode binary data
 
 app = Flask(__name__)
 
