@@ -106,6 +106,14 @@ def get_image(image_id):
         return send_file(image_data, mimetype='image/png')  # Adjust MIME type if needed
 
     return jsonify({"error": "Image not found"}), 404
+@app.route('/total_items')
+def get_total_items():
+    conn = sqlite3.connect("screenshots.db")
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM screenshots")
+    total_items = c.fetchone()[0]
+    conn.close()
+    return jsonify({"total_items": total_items})
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5001, debug=True)
