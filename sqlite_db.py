@@ -1,7 +1,7 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS  # Import CORS
 import sqlite3
-import base64  # Needed to encode binary data
+import io  # Needed to handle binary image data
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS
@@ -65,33 +65,47 @@ def get_data():
     c = conn.cursor()
 
     if ids:
-        # Use parameterized query to prevent SQL injection
         placeholders = ','.join('?' for _ in ids)
-        query = f"SELECT * FROM screenshots WHERE id IN ({placeholders})"
+        query = f"SELECT id, computer_name, system, processor, public_ip, location, timestamp FROM screenshots WHERE id IN ({placeholders})"
         c.execute(query, ids)
     elif last_n is not None:
-        query = "SELECT * FROM screenshots ORDER BY timestamp DESC LIMIT ?"
+        query = "SELECT id, computer_name, system, processor, public_ip, location, timestamp FROM screenshots ORDER BY timestamp DESC LIMIT ?"
         c.execute(query, (last_n,))
     elif id_range_start is not None and id_range_end is not None:
-        query = "SELECT * FROM screenshots WHERE id BETWEEN ? AND ?"
+        query = "SELECT id, computer_name, system, processor, public_ip, location, timestamp FROM screenshots WHERE id BETWEEN ? AND ?"
         c.execute(query, (id_range_start, id_range_end))
     else:
         return jsonify({"error": "No IDs, last_n, or range parameters provided"}), 400
 
     data = c.fetchall()
-
-    # Convert the fetched data into a list of dictionaries for JSON serialization
     column_names = [column[0] for column in c.description]
+
     result = [
         {
-            column: (base64.b64encode(value).decode() if isinstance(value, bytes) else value)
-            for column, value in zip(column_names, row)
-        }
-        for row in data
+            column: value for column, value in zip(column_names, row)
+        } for row in data
     ]
+
+    # Add image URL dynamically
+    for entry in result:
+        entry["image_url"] = f"/image/{entry['id']}"
 
     conn.close()
     return jsonify({"data": result})
+
+@app.route('/image/<int:image_id>')
+def get_image(image_id):
+    conn = sqlite3.connect("screenshots.db")
+    c = conn.cursor()
+    c.execute("SELECT image_file FROM screenshots WHERE id = ?", (image_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if row and row[0]:
+        image_data = io.BytesIO(row[0])  # Convert BLOB to file-like object
+        return send_file(image_data, mimetype='image/png')  # Adjust MIME type if needed
+
+    return jsonify({"error": "Image not found"}), 404
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5001, debug=True)
