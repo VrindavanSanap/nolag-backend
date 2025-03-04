@@ -1,8 +1,10 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS  # Import CORS
 import sqlite3
 import base64  # Needed to encode binary data
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS
 
 # Initialize the database
 def init_db():
@@ -51,19 +53,26 @@ def upload_screenshot():
     conn.close()
 
     return jsonify({"message": "Screenshot data saved successfully"}), 201
+
 @app.route('/data', methods=['GET'])
 def get_data():
     ids = request.args.getlist('id')
-    if not ids:
-        return jsonify({"error": "No IDs provided"}), 400
-
-    # Use parameterized query to prevent SQL injection
-    placeholders = ','.join('?' for _ in ids)
-    query = f"SELECT * FROM screenshots WHERE id IN ({placeholders})"
+    last_n = request.args.get('last_n', type=int)
 
     conn = sqlite3.connect("screenshots.db")
     c = conn.cursor()
-    c.execute(query, ids)
+
+    if ids:
+        # Use parameterized query to prevent SQL injection
+        placeholders = ','.join('?' for _ in ids)
+        query = f"SELECT * FROM screenshots WHERE id IN ({placeholders})"
+        c.execute(query, ids)
+    elif last_n is not None:
+        query = "SELECT * FROM screenshots ORDER BY timestamp DESC LIMIT ?"
+        c.execute(query, (last_n,))
+    else:
+        return jsonify({"error": "No IDs or last_n parameter provided"}), 400
+
     data = c.fetchall()
 
     # Convert the fetched data into a list of dictionaries for JSON serialization
@@ -78,5 +87,6 @@ def get_data():
 
     conn.close()
     return jsonify({"data": result})
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5001, debug=True)
