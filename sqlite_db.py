@@ -58,6 +58,8 @@ def upload_screenshot():
 def get_data():
     ids = request.args.getlist('id')
     last_n = request.args.get('last_n', type=int)
+    id_range_start = request.args.get('range_start', type=int)
+    id_range_end = request.args.get('range_end', type=int)
 
     conn = sqlite3.connect("screenshots.db")
     c = conn.cursor()
@@ -70,8 +72,11 @@ def get_data():
     elif last_n is not None:
         query = "SELECT * FROM screenshots ORDER BY timestamp DESC LIMIT ?"
         c.execute(query, (last_n,))
+    elif id_range_start is not None and id_range_end is not None:
+        query = "SELECT * FROM screenshots WHERE id BETWEEN ? AND ?"
+        c.execute(query, (id_range_start, id_range_end))
     else:
-        return jsonify({"error": "No IDs or last_n parameter provided"}), 400
+        return jsonify({"error": "No IDs, last_n, or range parameters provided"}), 400
 
     data = c.fetchall()
 
