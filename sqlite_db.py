@@ -106,6 +106,44 @@ def get_image(image_id):
         return send_file(image_data, mimetype='image/png')  # Adjust MIME type if needed
 
     return jsonify({"error": "Image not found"}), 404
+@app.route('/page/<int:page_number>')
+def get_page(page_number):
+    items_per_page = 10
+    offset = (page_number - 1) * items_per_page
+
+    conn = sqlite3.connect("screenshots.db")
+    c = conn.cursor()
+    query = "SELECT id, computer_name, system, processor, public_ip, location, timestamp FROM screenshots ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+    c.execute(query, (items_per_page, offset))
+    
+    data = c.fetchall()
+    column_names = [column[0] for column in c.description]
+
+    result = [
+        {
+            column: value for column, value in zip(column_names, row)
+        } for row in data
+    ]
+
+    # Add image URL dynamically
+    for entry in result:
+        entry["image_url"] = f"/image/{entry['id']}"
+
+    conn.close()
+    return jsonify({"data": result})
+
+@app.route('/total_pages')
+def get_total_pages():
+    items_per_page = 10  # This should match the items_per_page in get_page
+    conn = sqlite3.connect("screenshots.db")
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM screenshots")
+    total_items = c.fetchone()[0]
+    conn.close()
+    
+    total_pages = (total_items + items_per_page - 1) // items_per_page  # Calculate total pages
+    return jsonify({"total_pages": total_pages})
+
 @app.route('/total_items')
 def get_total_items():
     conn = sqlite3.connect("screenshots.db")
