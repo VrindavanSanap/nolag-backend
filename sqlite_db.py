@@ -1,157 +1,161 @@
 from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS  # Import CORS
+from flask_cors import CORS
 import sqlite3
-import io  # Needed to handle binary image data
+import io
+import logging
+import ssl
+
+# Configure logging to save logs to a file
+logging.basicConfig(filename='app.log', level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS
+CORS(app)
 
-# Initialize the database
+# Database setup
 def init_db():
-    conn = sqlite3.connect("screenshots.db")
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS screenshots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            computer_name TEXT,
-            system TEXT,
-            processor TEXT,
-            public_ip TEXT,
-            image_file BLOB,
-            location TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
+    with sqlite3.connect("screenshots.db") as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS screenshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                computer_name TEXT,
+                system TEXT,
+                processor TEXT,
+                public_ip TEXT,
+                image_file BLOB,
+                location TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-init_db()  # Ensure DB is set up
+init_db()
+
+# Helper function to get database connection
+def get_db_connection():
+    conn = sqlite3.connect("screenshots.db")
+    conn.row_factory = sqlite3.Row  # This enables column access by name
+    return conn
 
 @app.route('/upload', methods=['POST'])
 def upload_screenshot():
+    client_ip = request.remote_addr
+    logging.info(f"Upload request from IP: {client_ip}")
+    
     data = request.form
-
-    computer_name = data.get("computer_name")
-    system = data.get("system")
-    processor = data.get("processor")
-    public_ip = data.get("public_ip")
-    image_file = request.files.get("image_file")
-    location = data.get("location")
-
-    if not all([computer_name, system, processor, public_ip, image_file, location]):
-        return jsonify({"error": "Missing data"}), 400
-
-    image_data = image_file.read()
-
-    conn = sqlite3.connect("screenshots.db")
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO screenshots (computer_name, system, processor, public_ip, image_file, location)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (computer_name, system, processor, public_ip, image_data, location))
-    conn.commit()
-    conn.close()
-
-    return jsonify({"message": "Screenshot data saved successfully"}), 201
+    required_fields = ["computer_name", "system", "processor", "public_ip", "location"]
+    
+    # Check for required fields
+    if not all(field in data for field in required_fields) or "image_file" not in request.files:
+        return jsonify({"error": "Missing required data"}), 400
+    
+    image_data = request.files["image_file"].read()
+    
+    with get_db_connection() as conn:
+        conn.execute("""
+            INSERT INTO screenshots (computer_name, system, processor, public_ip, image_file, location)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (data["computer_name"], data["system"], data["processor"], 
+              data["public_ip"], image_data, data["location"]))
+    
+    return jsonify({"message": "Screenshot saved successfully"}), 201
 
 @app.route('/data', methods=['GET'])
 def get_data():
+    client_ip = request.remote_addr
+    logging.info(f"Data request from IP: {client_ip}")
+    
     ids = request.args.getlist('id')
     last_n = request.args.get('last_n', type=int)
     id_range_start = request.args.get('range_start', type=int)
     id_range_end = request.args.get('range_end', type=int)
-
-    conn = sqlite3.connect("screenshots.db")
-    c = conn.cursor()
-
-    if ids:
-        placeholders = ','.join('?' for _ in ids)
-        query = f"SELECT id, computer_name, system, processor, public_ip, location, timestamp FROM screenshots WHERE id IN ({placeholders})"
-        c.execute(query, ids)
-    elif last_n is not None:
-        query = "SELECT id, computer_name, system, processor, public_ip, location, timestamp FROM screenshots ORDER BY timestamp DESC LIMIT ?"
-        c.execute(query, (last_n,))
-    elif id_range_start is not None and id_range_end is not None:
-        query = "SELECT id, computer_name, system, processor, public_ip, location, timestamp FROM screenshots WHERE id BETWEEN ? AND ?"
-        c.execute(query, (id_range_start, id_range_end))
-    else:
-        return jsonify({"error": "No IDs, last_n, or range parameters provided"}), 400
-
-    data = c.fetchall()
-    column_names = [column[0] for column in c.description]
-
-    result = [
-        {
-            column: value for column, value in zip(column_names, row)
-        } for row in data
-    ]
-
-    # Add image URL dynamically
-    for entry in result:
-        entry["image_url"] = f"/image/{entry['id']}"
-
-    conn.close()
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        if ids:
+            placeholders = ','.join('?' for _ in ids)
+            query = f"SELECT id, computer_name, system, processor, public_ip, location, timestamp FROM screenshots WHERE id IN ({placeholders})"
+            cursor.execute(query, ids)
+        elif last_n:
+            query = "SELECT id, computer_name, system, processor, public_ip, location, timestamp FROM screenshots ORDER BY timestamp DESC LIMIT ?"
+            cursor.execute(query, (last_n,))
+        elif id_range_start and id_range_end:
+            query = "SELECT id, computer_name, system, processor, public_ip, location, timestamp FROM screenshots WHERE id BETWEEN ? AND ?"
+            cursor.execute(query, (id_range_start, id_range_end))
+        else:
+            return jsonify({"error": "Please provide id, last_n, or range parameters"}), 400
+        
+        result = [dict(row) for row in cursor.fetchall()]
+        
+        # Add image URL to each result
+        for entry in result:
+            entry["image_url"] = f"/image/{entry['id']}"
+    
     return jsonify({"data": result})
 
 @app.route('/image/<int:image_id>')
 def get_image(image_id):
-    conn = sqlite3.connect("screenshots.db")
-    c = conn.cursor()
-    c.execute("SELECT image_file FROM screenshots WHERE id = ?", (image_id,))
-    row = c.fetchone()
-    conn.close()
+    client_ip = request.remote_addr
+    logging.info(f"Image request from IP: {client_ip} for image ID: {image_id}")
+    
+    with get_db_connection() as conn:
+        image_data = conn.execute("SELECT image_file FROM screenshots WHERE id = ?", 
+                                (image_id,)).fetchone()
+    
+    if not image_data:
+        return jsonify({"error": "Image not found"}), 404
+        
+    return send_file(io.BytesIO(image_data[0]), mimetype='image/png')
 
-    if row and row[0]:
-        image_data = io.BytesIO(row[0])  # Convert BLOB to file-like object
-        return send_file(image_data, mimetype='image/png')  # Adjust MIME type if needed
-
-    return jsonify({"error": "Image not found"}), 404
 @app.route('/page/<int:page_number>')
 def get_page(page_number):
+    client_ip = request.remote_addr
+    logging.info(f"Page request from IP: {client_ip} for page number: {page_number}")
+    
     items_per_page = 10
     offset = (page_number - 1) * items_per_page
-
-    conn = sqlite3.connect("screenshots.db")
-    c = conn.cursor()
-    query = "SELECT id, computer_name, system, processor, public_ip, location, timestamp FROM screenshots ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-    c.execute(query, (items_per_page, offset))
     
-    data = c.fetchall()
-    column_names = [column[0] for column in c.description]
-
-    result = [
-        {
-            column: value for column, value in zip(column_names, row)
-        } for row in data
-    ]
-
-    # Add image URL dynamically
-    for entry in result:
-        entry["image_url"] = f"/image/{entry['id']}"
-
-    conn.close()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, computer_name, system, processor, public_ip, location, timestamp 
+            FROM screenshots 
+            ORDER BY timestamp DESC 
+            LIMIT ? OFFSET ?
+        """, (items_per_page, offset))
+        
+        result = [dict(row) for row in cursor.fetchall()]
+        
+        # Add image URL to each result
+        for entry in result:
+            entry["image_url"] = f"/image/{entry['id']}"
+    
     return jsonify({"data": result})
 
 @app.route('/total_pages')
 def get_total_pages():
-    items_per_page = 10  # This should match the items_per_page in get_page
-    conn = sqlite3.connect("screenshots.db")
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM screenshots")
-    total_items = c.fetchone()[0]
-    conn.close()
+    client_ip = request.remote_addr
+    logging.info(f"Total pages request from IP: {client_ip}")
     
-    total_pages = (total_items + items_per_page - 1) // items_per_page  # Calculate total pages
+    items_per_page = 10
+    
+    with get_db_connection() as conn:
+        total_items = conn.execute("SELECT COUNT(*) FROM screenshots").fetchone()[0]
+    
+    total_pages = (total_items + items_per_page - 1) // items_per_page
     return jsonify({"total_pages": total_pages})
 
 @app.route('/total_items')
 def get_total_items():
-    conn = sqlite3.connect("screenshots.db")
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM screenshots")
-    total_items = c.fetchone()[0]
-    conn.close()
+    client_ip = request.remote_addr
+    logging.info(f"Total items request from IP: {client_ip}")
+    
+    with get_db_connection() as conn:
+        total_items = conn.execute("SELECT COUNT(*) FROM screenshots").fetchone()[0]
+    
     return jsonify({"total_items": total_items})
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certfile='path/to/fullchain.pem', keyfile='path/to/privkey.pem')
+    app.run(host="0.0.0.0", port=5001, debug=True, ssl_context=context)
